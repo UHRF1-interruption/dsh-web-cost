@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "网页用量计费",
+    "description": "统计本机所有会话的 DeepSeek 网页搜索/抓取用量，并按 Search/Fetch 计价规则估算费用。"
+  }
+}

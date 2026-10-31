@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Web Usage Meter",
+    "description": "Measures DeepSeek web search and fetch usage across every local session and estimates the Search/Fetch API bill."
+  }
+}

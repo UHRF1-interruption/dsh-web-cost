@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Web usage meter">
+  <rect x="6" y="10" width="52" height="44" rx="8" fill="none" stroke="#247bbf" stroke-width="3"/>
+  <path d="M14 42 L22 30 L30 36 L38 20 L50 28" fill="none" stroke="#247bbf" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="38" cy="20" r="3" fill="#247bbf"/>
+  <text x="32" y="49" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#247bbf">¥/1k</text>
+</svg>
