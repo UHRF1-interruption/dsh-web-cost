@@ -19,6 +19,8 @@ export const inject = ['tools', 'sessionPersistence', 'webServer']
 /** Beijing time offset: billing days are Beijing days. */
 const BJ_OFFSET = 8 * 3600 * 1000
 const DEFAULT_RATE = 5 // CNY per 1,000 successful requests, Search and Fetch each (2026-11-01)
+/** Billing starts at 00:00 Beijing time on this day; earlier calls are free. */
+const BILLING_START_DAY = '2026-11-01'
 const CACHE_LIMIT = 4096
 
 /** Per-session fold cache: sessionId → { eventCount, days }. */
@@ -99,6 +101,7 @@ async function collect(persistence, days, searchRate, fetchRate, billedFetch) {
   const snapshots = await persistence.list()
   const perSession = []
   const perDay = new Map()
+  const billable = { queries: 0, search: 0, fetch: 0, fetchErrors: 0 }
   let earliestDay = null
 
   for (const snapshot of snapshots) {
@@ -114,10 +117,17 @@ async function collect(persistence, days, searchRate, fetchRate, billedFetch) {
       search += row.search
       fetch += row.fetch
       fetchErrors += row.fetchErrors
-      const agg = perDay.get(day) ?? { day, queries: 0, search: 0, fetch: 0 }
+      if (day >= BILLING_START_DAY) {
+        billable.queries += row.queries
+        billable.search += row.search
+        billable.fetch += row.fetch
+        billable.fetchErrors += row.fetchErrors
+      }
+      const agg = perDay.get(day) ?? { day, queries: 0, search: 0, fetch: 0, billable: false }
       agg.queries += row.queries
       agg.search += row.search
       agg.fetch += row.fetch
+      agg.billable = agg.day >= BILLING_START_DAY
       perDay.set(day, agg)
     }
     if (search || fetch) {
@@ -135,57 +145,69 @@ async function collect(persistence, days, searchRate, fetchRate, billedFetch) {
     return acc
   }, { queries: 0, search: 0, fetch: 0, fetchErrors: 0 })
 
-  const searchCost = (totals.queries * searchRate) / 1000
-  const fetchCost = billedFetch ? (((totals.fetch - totals.fetchErrors) * fetchRate) / 1000) : 0
+  const searchCost = (billable.queries * searchRate) / 1000
+  const fetchCost = billedFetch ? (((billable.fetch - billable.fetchErrors) * fetchRate) / 1000) : 0
   const cost = searchCost + fetchCost
-  const observedDays = earliestDay
-    ? Math.min(days, Math.round((Date.parse(toDay(now)) - Date.parse(earliestDay)) / 86400000) + 1)
-    : days
+
+  // 计费从 2026-11-01 00:00（北京时间）开始：只有这一天的零点及之后的 query 才收费。
+  const today = toDay(now)
+  const billingStart = Math.max(Date.parse(BILLING_START_DAY), Date.parse(cutoffDay))
+  const billingDays = today < BILLING_START_DAY
+    ? 0
+    : Math.round((Date.parse(today) - billingStart) / 86400000) + 1
+  const monthly = billingDays > 0 ? (cost / billingDays) * 30 : 0
+  const monthlyQueries = billingDays > 0 ? Math.round((billable.queries / billingDays) * 30) : 0
 
   return {
     generatedAt: now,
     days,
-    today: toDay(now),
+    today,
+    billingStartDay: BILLING_START_DAY,
     sessionsOnDisk: snapshots.length,
     sessions: perSession.sort((a, b) => b.queries - a.queries),
     totals,
+    billable,
     searchCost,
     fetchCost,
     cost,
     billedFetch,
-    observedDays,
-    monthly: (cost / observedDays) * 30,
-    monthlyQueries: Math.round((totals.queries / observedDays) * 30),
+    billingDays,
+    earliestDay,
+    monthly,
+    monthlyQueries,
+    usageBefore: totals.queries - billable.queries,
     perDay: [...perDay.values()].sort((a, b) => a.day.localeCompare(b.day)),
   }
 }
 
 /** The model-facing prose report. */
 function report(data, detail) {
-  const { totals, searchCost, fetchCost, cost, days, perDay, sessions, observedDays } = data
+  const { totals, billable, cost, days, perDay, sessions } = data
   const lines = []
   lines.push(`网页搜索/抓取用量 · 近 ${days} 天（北京时间，截至 ${data.today}）`)
-  lines.push(`会话 ${sessions.length} 个有记录（本机共 ${data.sessionsOnDisk} 个）；费用按 5 元/1000 次搜索、5 元/1000 次抓取。`)
+  lines.push(`会话 ${sessions.length} 个有记录（本机共 ${data.sessionsOnDisk} 个）。`)
   lines.push('')
-  lines.push(`web_search : ${totals.search} 次调用 / ${totals.queries} 条 query（${(totals.queries / Math.max(totals.search, 1)).toFixed(2)} 条/次）`)
-  lines.push(`web_fetch  : ${totals.fetch} 次（失败 ${totals.fetchErrors} 次，成功才计费）`)
+  lines.push(`计费自 ${data.billingStartDay} 00:00 起，已计费 ${data.billingDays} 天：`)
+  lines.push(`  总计费 ${cost.toFixed(2)} 元（计费期内 ${billable.queries} 条 query）`)
+  lines.push(`  折合每月 ${data.monthly.toFixed(2)} 元/月（${data.monthlyQueries} 条 query/月；总量 ÷ 计费天数 × 30）`)
   lines.push('')
-  lines.push(`预估费用：搜索 ${searchCost.toFixed(2)} 元` + (data.billedFetch
-    ? ` + 抓取 ${fetchCost.toFixed(2)} 元 = ${cost.toFixed(2)} 元`
-    : `（抓取走本地 HTTP，0 元；若改走 DeepSeek Fetch API 再加 ${(((totals.fetch - totals.fetchErrors) * 5) / 1000).toFixed(2)} 元）`))
-  lines.push(`折合 30 天：约 ${data.monthly.toFixed(2)} 元/月（${data.monthlyQueries} 条 query/月；按实际有记录的 ${observedDays} 天折算）`)
+  lines.push(`web_search : 窗口内 ${totals.search} 次调用 / ${totals.queries} 条 query（${(totals.queries / Math.max(totals.search, 1)).toFixed(2)} 条/次），其中计费期 ${billable.search} 次 / ${billable.queries} 条`)
+  lines.push(`web_fetch  : 窗口内 ${totals.fetch} 次（失败 ${totals.fetchErrors}），计费期 ${billable.fetch} 次`)
+  if (data.usageBefore > 0) {
+    lines.push(`  ${data.billingStartDay} 之前的 ${data.usageBefore} 条 query 不计费。`)
+  }
 
   if (detail !== 'summary') {
     lines.push('')
-    lines.push('日期         query  search  fetch   搜索费')
+    lines.push('日期         query  search  fetch  计费')
     for (const row of perDay) {
-      lines.push(`${row.day}  ${String(row.queries).padStart(5)}  ${String(row.search).padStart(6)}  ${String(row.fetch).padStart(5)}   ${(row.queries * 5 / 1000).toFixed(3)} 元`)
+      lines.push(`${row.day}  ${String(row.queries).padStart(5)}  ${String(row.search).padStart(6)}  ${String(row.fetch).padStart(5)}  ${row.billable ? '是' : '—'}`)
     }
   }
 
   if (detail === 'sessions') {
     lines.push('')
-    lines.push('最费 query 的会话：')
+    lines.push('最费 query 的会话（整个窗口）：')
     for (const s of sessions.slice(0, 10)) {
       const when = s.createdAt ? fmt(s.createdAt) : '?'
       const where = s.cwd ? s.cwd.split(/[\\/]/).pop() : ''
@@ -194,7 +216,7 @@ function report(data, detail) {
   }
 
   lines.push('')
-  lines.push('口径：一条 query 就是一次 Search 请求；失败请求不计费。数据只读自本机会话日志。')
+  lines.push('口径：一条 query 就是一次 Search 请求，5 元/1000 次；失败请求不计费。数据只读自本机会话日志。')
   return lines.join('\n')
 }
 
@@ -252,9 +274,9 @@ export function apply(ctx) {
       const data = await collect(persistence, days, searchRate, fetchRate, billedFetch)
       return {
         text: report(data, detail),
-        queries: data.totals.queries,
-        searches: data.totals.search,
-        fetches: data.totals.fetch,
+        queries: data.billable.queries,
+        searches: data.billable.search,
+        fetches: data.billable.fetch,
         cost: Number(data.cost.toFixed(4)),
       }
     },
@@ -276,11 +298,14 @@ export function apply(ctx) {
           generatedAt: data.generatedAt,
           days: data.days,
           today: data.today,
+          billingStartDay: data.billingStartDay,
+          billingDays: data.billingDays,
           totals: data.totals,
+          billable: data.billable,
           cost: Number(data.cost.toFixed(4)),
           monthly: Number(data.monthly.toFixed(4)),
           monthlyQueries: data.monthlyQueries,
-          observedDays: data.observedDays,
+          usageBefore: data.usageBefore,
           sessions: data.sessions.slice(0, 12).map((s) => ({
             id: s.id, queries: s.queries, search: s.search, fetch: s.fetch, createdAt: s.createdAt,
           })),

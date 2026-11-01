@@ -106,21 +106,25 @@ window.__ModuleLoader__.load({
       totals ? h('div', { style: { marginTop: 12 } },
         h('div', { style: { display: 'flex', gap: 10, marginBottom: 4 } },
           h('div', { style: { flex: 1, background: COLORS.raised, borderRadius: 10, padding: '10px 12px' } },
-            h('div', { style: { color: COLORS.muted, fontSize: 11 } }, '近 30 天预估'),
-            h('div', { style: { fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }, money(data.cost))),
-          h('div', { style: { flex: 1, background: COLORS.raised, borderRadius: 10, padding: '10px 12px' } },
             h('div', { style: { color: COLORS.muted, fontSize: 11 } }, '折合每月'),
-            h('div', { style: { fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }, money(data.monthly)))),
-        h(Row, { label: 'web_search 调用 / query', value: `${totals.search} 次 / ${totals.queries} 条` }),
-        h(Row, { label: 'web_fetch 调用（本地 HTTP 不计费）', value: `${totals.fetch} 次` }),
-        h(Row, { label: '折合每月 query', value: `${data.monthlyQueries} 条` }),
-        h(Row, { label: '口径', value: '5 元 / 1000 次，只算成功请求' })) : null,
+            h('div', { style: { fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' } }, money(data.monthly)),
+            h('div', { style: { color: COLORS.muted, fontSize: 10 } }, `按计费 ${data.billingDays} 天折算`)),
+          h('div', { style: { flex: 1, background: COLORS.raised, borderRadius: 10, padding: '10px 12px' } },
+            h('div', { style: { color: COLORS.muted, fontSize: 11 } }, '总计费'),
+            h('div', { style: { fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: COLORS.accent } }, money(data.cost)),
+            h('div', { style: { color: COLORS.muted, fontSize: 10 } }, `${data.billingStartDay} 00:00 起 · ${data.billable.queries} 条 query`))),
+        h(Row, { label: `计费期 web_search（${data.billingDays} 天）`, value: `${data.billable.search} 次 / ${data.billable.queries} 条` }),
+        h(Row, { label: '近 30 天窗口用量（含计费前）', value: `${totals.search} 次 / ${totals.queries} 条` }),
+        h(Row, { label: 'web_fetch（本地 HTTP 不计费）', value: `${totals.fetch} 次` }),
+        h(Row, { label: '口径', value: '5 元 / 1000 次，只算成功请求' }),
+        data.usageBefore > 0 ? h('div', { style: { color: COLORS.muted, fontSize: 11, marginTop: 4 } },
+          `${data.billingStartDay} 之前的 ${data.usageBefore} 条 query 不计费。`) : null) : null,
 
       days.length ? h('div', { style: { marginTop: 14 } },
         h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, '最近 14 个有记录的日子'),
         h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
           h('thead', null, h('tr', null,
-            ['日期', 'query', '搜索', '抓取'].map((t, i) => h('th', {
+            ['日期', 'query', '搜索', '抓取', '计费'].map((t, i) => h('th', {
               key: t,
               style: {
                 textAlign: i === 0 ? 'left' : 'right', fontWeight: 500, color: COLORS.muted,
@@ -131,7 +135,8 @@ window.__ModuleLoader__.load({
             h('td', { style: { padding: '3px 0', color: COLORS.text } }, row.day),
             h('td', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, row.queries),
             h('td', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, row.search),
-            h('td', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, row.fetch)))))) : null,
+            h('td', { style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, row.fetch),
+            h('td', { style: { textAlign: 'right', color: row.billable ? COLORS.accent : COLORS.muted } }, row.billable ? '是' : '—')))))) : null,
 
       data?.sessions?.length ? h('div', { style: { marginTop: 14 } },
         h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 2 } }, '用量最高的会话'),
@@ -153,7 +158,7 @@ window.__ModuleLoader__.load({
       const label = error
         ? '网页用量 —'
         : data
-          ? `网页 ${money(data.monthly)}/月 · ${data.totals.queries} query`
+          ? `网页 ${money(data.cost)} 计费 · ${data.billable.queries} query`
           : '网页用量 …'
 
       return h(React.Fragment, null,
